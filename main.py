@@ -3,7 +3,8 @@ from telegram import Bot, Update
 from telegram.ext import Updater, CommandHandler, CallbackContext
 
 # تنظیمات
-TELEGRAM_BOT_TOKEN = "توکن_ربات_خودت_را_اینجا_بگذار"
+TELEGRAM_BOT_TOKEN = "7762972292:AAEOjINaOiWzyJ0zJjrjjvtdTl6Wg51vCC8"
+
 CHAT_ID = None
 POLL_INTERVAL = 300
 MIN_POSITION_VALUE_USD = 10

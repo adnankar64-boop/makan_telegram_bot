@@ -3,3 +3,7 @@ flask
 requests
 urllib3
 apschedul
+requests
+telethon
+pyrogram
+python-dotenv

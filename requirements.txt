@@ -2,9 +2,7 @@ python-telegram-bot==13.15
 flask
 requests
 urllib3
-apscheduler
-
-requests
+apscheduler==3.10.4
 telethon
 pyrogram
 python-dotenv

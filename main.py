@@ -1,9 +1,15 @@
-import os
 import sys
+import os
+import json
+import logging
+import time
+import threading
+import requests
 
+# اضافه کردن مسیر ریشه
 sys.path.append(os.path.dirname(__file__))
 
-from hyperdash_telegram_bot_mtproto_coinglass import main
+from hyperdash_telegram_bot_mtproto_coinglass import main as bot_main
 
 if __name__ == "__main__":
-    main()
+    bot_main()

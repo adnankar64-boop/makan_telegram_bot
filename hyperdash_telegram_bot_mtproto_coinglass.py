@@ -21,13 +21,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from telegram import Bot, Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 # ---------------- CONFIG (from ENV) ----------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")

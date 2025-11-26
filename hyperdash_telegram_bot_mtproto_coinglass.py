@@ -1,12 +1,4 @@
-
-"""
-Compatibility Telegram signal bot:
-- Works with python-telegram-bot v20+ (Application) if available
-- Falls back to v13 (Updater) if Application is not present
-- Watches wallets via CoinGlass / DeBank / DexScreener / HyperDash
-- Detects buys/sells/balance changes/positions and stores state to disk
-- Reads config from ENV
-"""
+# <-- paste this as a full replacement of your script -->
 from __future__ import annotations
 
 import os
@@ -14,7 +6,7 @@ import json
 import time
 import logging
 import threading
-from typing import Any, Dict, List, Optional, Set, Callable
+from typing import Any, Dict, List, Optional, Set
 from datetime import datetime, timezone
 
 import requests
@@ -24,7 +16,6 @@ from urllib3.util.retry import Retry
 # Try to import modern PTB Application; otherwise fall back to Updater
 USE_APPLICATION = False
 try:
-    # v20+ imports
     from telegram import Bot, Update
     from telegram.ext import (
         Application,
@@ -36,12 +27,10 @@ try:
 
     USE_APPLICATION = True
 except Exception:
-    # fallback imports for older PTB (v13)
     from telegram import Bot, Update
     try:
         from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
     except Exception:
-        # last resort: import what we can; runtime will show clear error
         Updater = None
         CommandHandler = None
         MessageHandler = None
@@ -59,12 +48,14 @@ AUTHORIZED_CHATS_FILE = os.environ.get("AUTHORIZED_CHATS_FILE", "authorized_chat
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 
 REQUEST_TIMEOUT = 12
+VERBOSE_DEBUG = os.environ.get("VERBOSE_DEBUG", "0") == "1"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is not set. Aborting.")
 
 # ---------------- logging ----------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+level = logging.DEBUG if VERBOSE_DEBUG else logging.INFO
+logging.basicConfig(level=level, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("signal_bot")
 
 # ---------------- HTTP session ----------------
@@ -78,7 +69,6 @@ def make_session(proxies: Optional[dict] = None) -> requests.Session:
         s.proxies.update(proxies)
     s.headers.update({"User-Agent": "SignalBot/1.0"})
     return s
-
 
 PROXIES_REQUESTS = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else {}
 SESSION = make_session(PROXIES_REQUESTS)
@@ -97,7 +87,6 @@ def _read_json(path: str, default: Any):
         logger.debug(f"read_json {path} failed: {e}")
         return default
 
-
 def _write_json(path: str, data: Any):
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -105,17 +94,14 @@ def _write_json(path: str, data: Any):
     except Exception as e:
         logger.error(f"write_json {path} failed: {e}")
 
-
 def load_wallets() -> List[str]:
     data = _read_json(WALLETS_FILE, [])
     if isinstance(data, list):
         return [w.lower() for w in data]
     return []
 
-
 def save_wallets(wallets: List[str]):
     _write_json(WALLETS_FILE, wallets)
-
 
 def load_authorized_chats() -> Set[int]:
     data = _read_json(AUTHORIZED_CHATS_FILE, [])
@@ -124,31 +110,24 @@ def load_authorized_chats() -> Set[int]:
     except Exception:
         return set()
 
-
 def save_authorized_chats(chats: Set[int]):
     _write_json(AUTHORIZED_CHATS_FILE, list(chats))
-
 
 # ---------------- state ----------------
 state: Dict[str, Any] = _read_json(STATE_FILE, {})
 
-
 def save_state():
     _write_json(STATE_FILE, state)
 
-
 def get_wallet_state(addr: str) -> Dict[str, Any]:
     return state.get(addr.lower(), {"tokens": {}, "positions": [], "usd_total": 0.0})
-
 
 def set_wallet_state(addr: str, snap: Dict[str, Any]):
     state[addr.lower()] = snap
     save_state()
 
-
 # ---------------- authorization ----------------
 authorized_chats: Set[int] = load_authorized_chats()
-
 
 def authorize_chat(chat_id: int):
     if chat_id not in authorized_chats:
@@ -156,19 +135,22 @@ def authorize_chat(chat_id: int):
         save_authorized_chats(authorized_chats)
     return True
 
-
 # ---------------- Helper: safe send message (works for both versions) ----------------
 def send_message_sync(chat_id: int, text: str):
-    """
-    Synchronous send_message: works for both PTB v13 and v20 Bot objects.
-    """
     try:
-        bot.send_message(chat_id=chat_id, text=text)
+        bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
     except Exception as e:
         logger.exception("send_message failed: %s", e)
 
-
 # ---------------- Telegram command handlers (synchronous, compatible) ----------------
+def cmd_start_sync(update: Update, context):
+    try:
+        chat_id = update.effective_chat.id
+    except Exception:
+        return
+    authorize_chat(chat_id)
+    send_reply(update, "ربات فعال شد — چت شما مجاز شد ✅\nبرای اضافه کردن کیف‌پول: /add <address>")
+
 def cmd_add_sync(update: Update, context):
     try:
         chat_id = update.effective_chat.id
@@ -188,7 +170,15 @@ def cmd_add_sync(update: Update, context):
         wallets.append(addr)
         save_wallets(wallets)
         send_reply(update, f"آدرس {addr} اضافه شد ✅")
-
+        # immediate test-run for this wallet
+        try:
+            snap = detect_and_build_snapshots(addr)
+            if snap:
+                send_message_sync(chat_id, f"Snapshot for {addr}:\n`{json.dumps(snap, default=str)[:800]}`")
+            else:
+                send_message_sync(chat_id, f"توجه: هیچ داده‌ای از منابع پیدا نشد برای {addr}")
+        except Exception as e:
+            logger.exception("immediate snapshot after add failed: %s", e)
 
 def cmd_remove_sync(update: Update, context):
     chat_id = update.effective_chat.id
@@ -206,7 +196,6 @@ def cmd_remove_sync(update: Update, context):
     else:
         send_reply(update, "آدرس یافت نشد.")
 
-
 def cmd_list_sync(update: Update, context):
     chat_id = update.effective_chat.id
     authorize_chat(chat_id)
@@ -214,13 +203,30 @@ def cmd_list_sync(update: Update, context):
     txt = "فهرست کیف‌پول‌ها:\n" + ("\n".join(wallets) if wallets else "هیچ آدرسی ثبت نشده.")
     send_reply(update, txt)
 
-
 def cmd_status_sync(update: Update, context):
     chat_id = update.effective_chat.id
     authorize_chat(chat_id)
     wallets = load_wallets()
-    send_reply(update, f"Bot running.\nInterval: {POLL_INTERVAL}s\nWallets: {len(wallets)}")
+    send_reply(update, f"Bot running.\nInterval: {POLL_INTERVAL}s\nWallets: {len(wallets)}\nAuthorized chats: {len(authorized_chats)}")
 
+def cmd_debug_sync(update: Update, context):
+    """/debug <wallet> — run a single snapshot and return raw snapshot (for debugging)."""
+    chat_id = update.effective_chat.id
+    authorize_chat(chat_id)
+    args = getattr(context, "args", None) or []
+    if not args:
+        send_reply(update, "Usage: /debug <wallet_address>")
+        return
+    addr = args[0].strip().lower()
+    try:
+        snap = detect_and_build_snapshots(addr)
+        if not snap:
+            send_message_sync(chat_id, f"No snapshot found for {addr}")
+        else:
+            send_message_sync(chat_id, f"Snapshot for {addr}:\n`{json.dumps(snap, default=str)[:1600]}`")
+    except Exception as e:
+        logger.exception("debug snapshot failed: %s", e)
+        send_message_sync(chat_id, f"debug failed: {e}")
 
 # helper to reply either via update.message.reply_text (preferred) or bot.send_message
 def send_reply(update: Update, text: str):
@@ -228,18 +234,15 @@ def send_reply(update: Update, text: str):
         if hasattr(update, "message") and update.message:
             update.message.reply_text(text)
         else:
-            # fallback
             cid = update.effective_chat.id if update.effective_chat else None
             if cid:
                 send_message_sync(cid, text)
     except Exception:
-        # best-effort fallback
         try:
             cid = update.effective_chat.id
             send_message_sync(cid, text)
         except Exception:
             logger.exception("send_reply failed")
-
 
 # ---------------- Fetchers (CoinGlass / Debank / DexScreener / HyperDash) ----------------
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/search?q="
@@ -250,6 +253,7 @@ HYPERDASH_BASE = "https://hyperdash.info"
 def fetch_from_dexscreener_addr(address: str) -> Optional[Dict[str, Any]]:
     try:
         r = SESSION.get(DEXSCREENER_API + address, timeout=REQUEST_TIMEOUT)
+        logger.debug("dexscreener %s -> status %s len=%s", address, r.status_code, len(r.content) if r.content else 0)
         j = r.json()
         pairs = j.get("pairs") or []
         tokens = {}
@@ -261,14 +265,14 @@ def fetch_from_dexscreener_addr(address: str) -> Optional[Dict[str, Any]]:
             tokens[base] = tokens.get(base, 0.0) + liquidity
         if tokens:
             return {"address": address, "tokens": tokens, "source": "dexscreener"}
-    except Exception:
-        logger.debug("dexscreener fetch failed for %s", address)
+    except Exception as e:
+        logger.debug("dexscreener fetch failed for %s: %s", address, e)
     return None
-
 
 def fetch_from_debank(address: str) -> Optional[Dict[str, Any]]:
     try:
         r = SESSION.get(DEBANK_API + address, timeout=REQUEST_TIMEOUT)
+        logger.debug("debank %s -> status %s len=%s", address, r.status_code, len(r.content) if r.content else 0)
         j = r.json()
         total = float(((j.get("data") or {}).get("total_usd_value")) or 0)
         assets = (j.get("data") or {}).get("wallet_asset_list") or []
@@ -279,7 +283,7 @@ def fetch_from_debank(address: str) -> Optional[Dict[str, Any]]:
             price = float(a.get("price") or 0)
             amt = float(a.get("amount") or 0)
             if sym:
-                tokens[sym] = price * amt
+                tokens[sym] = tokens.get(sym, 0) + price * amt
 
         return {
             "address": address,
@@ -288,10 +292,9 @@ def fetch_from_debank(address: str) -> Optional[Dict[str, Any]]:
             "positions": [],
             "source": "debank",
         }
-    except Exception:
-        logger.debug("debank fetch failed for %s", address)
+    except Exception as e:
+        logger.debug("debank fetch failed for %s: %s", address, e)
         return None
-
 
 def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
     if not COINGLASS_API_KEY:
@@ -303,13 +306,13 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
     positions = []
 
     try:
-        # exchange assets
         r = SESSION.get(
             f"{COINGLASS_BASE}/api/exchange/assets",
             params={"wallet_address": address},
             headers=headers,
             timeout=REQUEST_TIMEOUT,
         )
+        logger.debug("coinglass assets %s -> status %s len=%s", address, r.status_code, len(r.content) if r.content else 0)
         if r.ok:
             j = r.json()
             for item in j.get("data", []):
@@ -318,7 +321,6 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
                 tokens[sym] = tokens.get(sym, 0) + v
                 usd_total += v
 
-        # futures positions (best-effort)
         try:
             r2 = SESSION.get(
                 f"{COINGLASS_BASE}/api/hyperliquid/position",
@@ -326,6 +328,7 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
                 headers=headers,
                 timeout=REQUEST_TIMEOUT,
             )
+            logger.debug("coinglass positions %s -> status %s len=%s", address, r2.status_code, len(r2.content) if r2.content else 0)
             if r2.ok:
                 j2 = r2.json()
                 for item in j2.get("data", {}).get("list", []):
@@ -351,14 +354,14 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
             "positions": positions,
             "source": "coinglass",
         }
-    except Exception:
-        logger.debug("coinglass fetch failed for %s", address)
+    except Exception as e:
+        logger.debug("coinglass fetch failed for %s: %s", address, e)
         return None
-
 
 def fetch_from_hyperdash(address: str) -> Optional[Dict[str, Any]]:
     try:
         r = SESSION.get(f"{HYPERDASH_BASE}/trader/{address}", timeout=REQUEST_TIMEOUT)
+        logger.debug("hyperdash %s -> status %s len=%s", address, r.status_code, len(r.content) if r.content else 0)
         if not r.ok:
             return None
 
@@ -381,10 +384,9 @@ def fetch_from_hyperdash(address: str) -> Optional[Dict[str, Any]]:
 
         if positions:
             return {"address": address, "positions": positions, "source": "hyperdash"}
-    except Exception:
-        logger.debug("hyperdash fetch failed for %s", address)
+    except Exception as e:
+        logger.debug("hyperdash fetch failed for %s: %s", address, e)
     return None
-
 
 # ---------------- Snapshot detection ----------------
 def detect_and_build_snapshots(addr: str) -> Optional[Dict[str, Any]]:
@@ -394,11 +396,14 @@ def detect_and_build_snapshots(addr: str) -> Optional[Dict[str, Any]]:
         fetch_from_dexscreener_addr,
         fetch_from_hyperdash,
     ):
-        r = f(addr)
-        if r:
-            return r
+        try:
+            r = f(addr)
+            if r:
+                logger.debug("snapshot for %s came from %s", addr, r.get("source"))
+                return r
+        except Exception as e:
+            logger.debug("fetcher %s raised for %s: %s", getattr(f, "__name__", str(f)), addr, e)
     return None
-
 
 # ---------------- Compare states → Events ----------------
 def compare_and_generate_events(addr: str, snap: Dict[str, Any]) -> List[str]:
@@ -452,21 +457,20 @@ def compare_and_generate_events(addr: str, snap: Dict[str, Any]) -> List[str]:
 
     return events
 
-
 # ---------------- sending signals ----------------
 def send_signal_sync(text: str):
-    """Send to all authorized chats (synchronous)."""
     for cid in list(authorized_chats):
         try:
             send_message_sync(cid, text)
         except Exception as e:
             logger.error(f"send to {cid} failed: {e}")
 
-
 # ---------------- poller thread (synchronous) ----------------
 def process_wallet_sync(addr: str):
+    logger.debug("processing wallet %s", addr)
     snap = detect_and_build_snapshots(addr)
     if not snap:
+        logger.debug("no snapshot for %s from any source", addr)
         return
     events = compare_and_generate_events(addr, snap)
 
@@ -479,14 +483,19 @@ def process_wallet_sync(addr: str):
     set_wallet_state(addr, new_state)
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    for e in events:
-        send_signal_sync(f"⚡ سیگنال — `{addr}`\n{e}\n⏱ {ts}")
-
+    if events:
+        for e in events:
+            send_signal_sync(f"⚡ سیگنال — `{addr}`\n{e}\n⏱ {ts}")
+            logger.info("signal for %s: %s", addr, e)
+    else:
+        logger.debug("no events generated for %s", addr)
 
 def poller_thread():
     logger.info("Poller thread started, interval %s seconds", POLL_INTERVAL)
     while True:
         wallets = load_wallets()
+        if not wallets:
+            logger.debug("no wallets to poll")
         for w in wallets:
             try:
                 process_wallet_sync(w)
@@ -494,29 +503,34 @@ def poller_thread():
                 logger.exception("poll error %s", w)
         time.sleep(POLL_INTERVAL)
 
-
 # ---------------- start/registration ----------------
 def build_and_start_bot():
-    """
-    Build handlers and start bot depending on available PTB version.
-    """
-    # Handlers (use sync functions; compatible with v13 and v20)
     handlers = [
+        ("start", cmd_start_sync),
         ("add", cmd_add_sync),
         ("remove", cmd_remove_sync),
         ("list", cmd_list_sync),
         ("status", cmd_status_sync),
+        ("debug", cmd_debug_sync),
     ]
 
-    # Start poller thread
     t = threading.Thread(target=poller_thread, daemon=True)
     t.start()
+
+    # notify authorized chats that bot started (if any)
+    if authorized_chats:
+        for cid in list(authorized_chats):
+            try:
+                send_message_sync(cid, f"Bot running. Interval {POLL_INTERVAL}s. Wallets: {len(load_wallets())}")
+            except Exception:
+                logger.debug("notify start failed for %s", cid)
 
     if USE_APPLICATION:
         logger.info("Using python-telegram-bot v20+ (Application)")
         app = Application.builder().token(BOT_TOKEN).build()
+        from telegram.ext import CommandHandler as CH  # keep compatibility naming
         for cmd, fn in handlers:
-            app.add_handler(CommandHandler(cmd, fn))
+            app.add_handler(CH(cmd, fn))
         app.run_polling()
     else:
         if Updater is None:
@@ -529,10 +543,8 @@ def build_and_start_bot():
         updater.start_polling()
         updater.idle()
 
-
 def main():
     build_and_start_bot()
-
 
 if __name__ == "__main__":
     main()

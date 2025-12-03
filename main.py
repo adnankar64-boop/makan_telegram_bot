@@ -1,9 +1,6 @@
-def main():
-    """
-    Main entry point — starts poller thread and telegram bot (Application یا Updater)
-    """
-    build_and_start_bot()
-
+# /app/main.py
+import asyncio
+from hyperdash_telegram_bot_mtproto_coinglass import main as bot_main
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(bot_main())

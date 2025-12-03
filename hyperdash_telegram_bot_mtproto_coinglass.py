@@ -548,3 +548,13 @@ def main():
 
 if __name__ == "__main__":
     main()
+def main():
+    global updater, application
+
+    if USE_APPLICATION:
+        print("Starting Application polling ...")
+        application.run_polling()
+    else:
+        print("Starting Updater polling ...")
+        updater.start_polling()
+        updater.idle()

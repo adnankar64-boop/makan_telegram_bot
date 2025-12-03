@@ -1,15 +1,9 @@
-import sys
-import os
-import json
-import logging
-import time
-import threading
-import requests
+def main():
+    """
+    Main entry point — starts poller thread and telegram bot (Application یا Updater)
+    """
+    build_and_start_bot()
 
-# اضافه کردن مسیر ریشه
-sys.path.append(os.path.dirname(__file__))
-
-from hyperdash_telegram_bot_mtproto_coinglass import main as bot_main
 
 if __name__ == "__main__":
-    bot_main()
+    main()

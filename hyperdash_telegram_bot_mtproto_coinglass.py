@@ -7,6 +7,7 @@ Compatibility Telegram signal bot:
 - Reads config from ENV
 """
 
+import sys
 import os
 import json
 import logging
@@ -15,6 +16,11 @@ import threading
 import requests
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Set
+
+# اضافه کردن مسیر ریشه
+sys.path.append(os.path.dirname(__file__))
+
+from hyperdash_telegram_bot_mtproto_coinglass import main as bot_main
 
 # Try to import modern PTB Application; otherwise fall back to Updater
 USE_APPLICATION = False
@@ -469,13 +475,4 @@ def build_and_start_bot():
     if USE_APPLICATION:
         logger.info("Using python-telegram-bot v20+ (Application)")
         app = Application.builder().token(BOT_TOKEN).build()
-        for cmd, fn in handlers:
-            app.add_handler(CommandHandler(cmd, fn))
-        app.run_polling()
-    else:
-        if Updater is None:
-            raise RuntimeError("No compatible python-telegram-bot found. Install v13 or v20+.")
-        logger.info("Using older python-telegram-bot (Updater)")
-        updater = Updater(token=BOT_TOKEN, use_context=True)
-        dp = updater.dispatcher
-        for cmd, fn
+        for cmd, fn in handlers

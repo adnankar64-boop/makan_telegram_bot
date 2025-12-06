@@ -7,20 +7,21 @@ Compatibility Telegram signal bot:
 - Detects buys/sells/balance changes/positions and stores state to disk
 - Reads config from ENV
 """
-from __future__ import annotations
-
+import sys
 import os
 import json
-import time
 import logging
+import time
 import threading
-from typing import Any, Dict, List, Optional, Set, Callable
-from datetime import datetime, timezone
-
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
+# اضافه کردن مسیر ریشه
+sys.path.append(os.path.dirname(__file__))
+
+from hyperdash_telegram_bot_mtproto_coinglass import main as bot_main
+
+if __name__ == "__main__":
+    bot_main()
 # Try to import modern PTB Application; otherwise fall back to Updater
 USE_APPLICATION = False
 try:

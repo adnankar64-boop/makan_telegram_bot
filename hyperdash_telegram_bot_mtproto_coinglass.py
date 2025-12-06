@@ -7,7 +7,11 @@ import requests
 from datetime import datetime
 
 from telegram import Update
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes
+)
 
 # -----------------------------------
 # LOGGING
@@ -27,56 +31,59 @@ DATA_DIR = "data"
 WALLETS_FILE = os.path.join(DATA_DIR, "wallets.json")
 STATES_FILE = os.path.join(DATA_DIR, "states.json")
 
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
 
 # -----------------------------------
-# LOAD/SAVE
+# LOAD / SAVE
 # -----------------------------------
 def load_wallets():
     if not os.path.exists(WALLETS_FILE):
         return []
-    return json.load(open(WALLETS_FILE))
+    with open(WALLETS_FILE) as f:
+        return json.load(f)
 
 def save_wallets(w):
-    json.dump(w, open(WALLETS_FILE, "w"), indent=2)
+    with open(WALLETS_FILE, "w") as f:
+        json.dump(w, f, indent=2)
 
 def load_states():
     if not os.path.exists(STATES_FILE):
         return {}
-    return json.load(open(STATES_FILE))
+    with open(STATES_FILE) as f:
+        return json.load(f)
 
 def save_states(s):
-    json.dump(s, open(STATES_FILE, "w"), indent=2)
+    with open(STATES_FILE, "w") as f:
+        json.dump(s, f, indent=2)
 
 states = load_states()
 authorized_chats = set()
 
+# -----------------------------------
+# SEND MESSAGE
+# -----------------------------------
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text})
-
+    requests.post(url, json={
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    })
 
 # -----------------------------------
-# API CALL
+# API CALL (BSC مثال)
 # -----------------------------------
 def get_transactions(wallet):
-    """
-    مثال API:
-      از سایت BscScan یا EtherScan
-    """
-
     url = f"https://api.bscscan.com/api?module=account&action=txlist&address={wallet}&sort=desc"
     r = requests.get(url).json()
 
     if r.get("status") != "1":
         return []
 
-    return r["result"][:5]   # آخرین 5 تراکنش
-
+    return r["result"][:5]
 
 # -----------------------------------
-# TYPE DETECTOR
+# TX TYPE
 # -----------------------------------
 def detect_type(tx, wallet):
     f = tx["from"].lower()
@@ -91,9 +98,8 @@ def detect_type(tx, wallet):
 
     return "TRANSFER 🔄"
 
-
 # -----------------------------------
-# POLLER
+# WALLET PROCESS
 # -----------------------------------
 def process_wallet(wallet):
     global states
@@ -116,7 +122,7 @@ def process_wallet(wallet):
 
         msg = f"""
 🔔 *تغییر جدید در کیف پول*
-{wallet}
+`{wallet}`
 
 نوع: {tx_type}
 هش: `{tx['hash']}`
@@ -130,7 +136,9 @@ def process_wallet(wallet):
 
     return new_events
 
-
+# -----------------------------------
+# BACKGROUND POLLER THREAD
+# -----------------------------------
 def poller():
     while True:
         wallets = load_wallets()
@@ -142,18 +150,19 @@ def poller():
                         send_message(cid, e)
             except Exception as ex:
                 logger.error(ex)
-        time.sleep(POLL_INTERVAL)
 
+        time.sleep(POLL_INTERVAL)
 
 # -----------------------------------
 # COMMANDS
 # -----------------------------------
-def cmd_add(update, context):
+async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat.id
     authorized_chats.add(chat)
 
     if len(context.args) != 1:
-        return send_message(chat, "آدرس اشتباه است.")
+        await update.message.reply_text("آدرس اشتباه است.")
+        return
 
     wallet = context.args[0]
     wallets = load_wallets()
@@ -162,36 +171,33 @@ def cmd_add(update, context):
         wallets.append(wallet)
         save_wallets(wallets)
 
-    send_message(chat, "کیف پول اضافه شد.")
+    await update.message.reply_text("✅ کیف پول اضافه شد.")
 
-
-def cmd_list(update, context):
+async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat.id
     authorized_chats.add(chat)
 
     wallets = load_wallets()
     if not wallets:
-        send_message(chat, "هیچ کیف پولی نیست.")
+        await update.message.reply_text("❌ هیچ کیف پولی ثبت نشده.")
     else:
-        send_message(chat, "\n".join(wallets))
-
+        await update.message.reply_text("\n".join(wallets))
 
 # -----------------------------------
-# START
+# MAIN
 # -----------------------------------
 def main():
-    t = threading.Thread(target=poller, daemon=True)
-    t.start()
+    # Thread برای مانیتورینگ کیف پول‌ها
+    threading.Thread(target=poller, daemon=True).start()
 
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
+    # Telegram App (نسخه جدید)
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    dp.add_handler(CommandHandler("add", cmd_add))
-    dp.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("add", cmd_add))
+    app.add_handler(CommandHandler("list", cmd_list))
 
-    updater.start_polling()
-    updater.idle()
-
+    logger.info("Bot Started...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

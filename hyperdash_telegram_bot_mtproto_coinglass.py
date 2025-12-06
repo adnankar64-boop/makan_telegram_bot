@@ -1,4 +1,3 @@
-
 """
 Compatibility Telegram signal bot:
 - Works with python-telegram-bot v20+ (Application) if available
@@ -7,21 +6,16 @@ Compatibility Telegram signal bot:
 - Detects buys/sells/balance changes/positions and stores state to disk
 - Reads config from ENV
 """
-import sys
+
 import os
 import json
 import logging
 import time
 import threading
 import requests
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional, Set
 
-# اضافه کردن مسیر ریشه
-sys.path.append(os.path.dirname(__file__))
-
-from hyperdash_telegram_bot_mtproto_coinglass import main as bot_main
-
-if __name__ == "__main__":
-    bot_main()
 # Try to import modern PTB Application; otherwise fall back to Updater
 USE_APPLICATION = False
 try:
@@ -34,19 +28,11 @@ try:
         ContextTypes,
         filters,
     )
-
     USE_APPLICATION = True
-except Exception:
+except ImportError:
     # fallback imports for older PTB (v13)
     from telegram import Bot, Update
-    try:
-        from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
-    except Exception:
-        # last resort: import what we can; runtime will show clear error
-        Updater = None
-        CommandHandler = None
-        MessageHandler = None
-        Filters = None
+    from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 # ---------------- CONFIG (from ENV) ----------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -71,15 +57,14 @@ logger = logging.getLogger("signal_bot")
 # ---------------- HTTP session ----------------
 def make_session(proxies: Optional[dict] = None) -> requests.Session:
     s = requests.Session()
-    retries = Retry(total=3, backoff_factor=1, status_forcelist=(500, 502, 503, 504))
-    adapter = HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=50)
+    retries = requests.adapters.Retry(total=3, backoff_factor=1, status_forcelist=(500, 502, 503, 504))
+    adapter = requests.adapters.HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=50)
     s.mount("http://", adapter)
     s.mount("https://", adapter)
     if proxies:
         s.proxies.update(proxies)
     s.headers.update({"User-Agent": "SignalBot/1.0"})
     return s
-
 
 PROXIES_REQUESTS = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else {}
 SESSION = make_session(PROXIES_REQUESTS)
@@ -98,7 +83,6 @@ def _read_json(path: str, default: Any):
         logger.debug(f"read_json {path} failed: {e}")
         return default
 
-
 def _write_json(path: str, data: Any):
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -106,17 +90,14 @@ def _write_json(path: str, data: Any):
     except Exception as e:
         logger.error(f"write_json {path} failed: {e}")
 
-
 def load_wallets() -> List[str]:
     data = _read_json(WALLETS_FILE, [])
     if isinstance(data, list):
         return [w.lower() for w in data]
     return []
 
-
 def save_wallets(wallets: List[str]):
     _write_json(WALLETS_FILE, wallets)
-
 
 def load_authorized_chats() -> Set[int]:
     data = _read_json(AUTHORIZED_CHATS_FILE, [])
@@ -125,31 +106,24 @@ def load_authorized_chats() -> Set[int]:
     except Exception:
         return set()
 
-
 def save_authorized_chats(chats: Set[int]):
     _write_json(AUTHORIZED_CHATS_FILE, list(chats))
-
 
 # ---------------- state ----------------
 state: Dict[str, Any] = _read_json(STATE_FILE, {})
 
-
 def save_state():
     _write_json(STATE_FILE, state)
 
-
 def get_wallet_state(addr: str) -> Dict[str, Any]:
     return state.get(addr.lower(), {"tokens": {}, "positions": [], "usd_total": 0.0})
-
 
 def set_wallet_state(addr: str, snap: Dict[str, Any]):
     state[addr.lower()] = snap
     save_state()
 
-
 # ---------------- authorization ----------------
 authorized_chats: Set[int] = load_authorized_chats()
-
 
 def authorize_chat(chat_id: int):
     if chat_id not in authorized_chats:
@@ -157,20 +131,15 @@ def authorize_chat(chat_id: int):
         save_authorized_chats(authorized_chats)
     return True
 
-
 # ---------------- Helper: safe send message (works for both versions) ----------------
 def send_message_sync(chat_id: int, text: str):
-    """
-    Synchronous send_message: works for both PTB v13 and v20 Bot objects.
-    """
     try:
         bot.send_message(chat_id=chat_id, text=text)
     except Exception as e:
         logger.exception("send_message failed: %s", e)
 
-
 # ---------------- Telegram command handlers (synchronous, compatible) ----------------
-def cmd_add_sync(update: Update, context):
+def cmd_add_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat_id = update.effective_chat.id
     except Exception:
@@ -181,7 +150,7 @@ def cmd_add_sync(update: Update, context):
     if not args:
         send_reply(update, "Usage: /add <wallet_address>")
         return
-    addr = args[0].strip().lower()
+    addr = args,[object Object],strip().lower()
     wallets = load_wallets()
     if addr in wallets:
         send_reply(update, "آدرس قبلا وجود دارد.")
@@ -190,15 +159,14 @@ def cmd_add_sync(update: Update, context):
         save_wallets(wallets)
         send_reply(update, f"آدرس {addr} اضافه شد ✅")
 
-
-def cmd_remove_sync(update: Update, context):
+def cmd_remove_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     authorize_chat(chat_id)
     args = getattr(context, "args", None) or []
     if not args:
         send_reply(update, "Usage: /remove <wallet_address>")
         return
-    addr = args[0].strip().lower()
+    addr = args,[object Object],strip().lower()
     wallets = load_wallets()
     if addr in wallets:
         wallets.remove(addr)
@@ -207,21 +175,18 @@ def cmd_remove_sync(update: Update, context):
     else:
         send_reply(update, "آدرس یافت نشد.")
 
-
-def cmd_list_sync(update: Update, context):
+def cmd_list_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     authorize_chat(chat_id)
     wallets = load_wallets()
     txt = "فهرست کیف‌پول‌ها:\n" + ("\n".join(wallets) if wallets else "هیچ آدرسی ثبت نشده.")
     send_reply(update, txt)
 
-
-def cmd_status_sync(update: Update, context):
+def cmd_status_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     authorize_chat(chat_id)
     wallets = load_wallets()
     send_reply(update, f"Bot running.\nInterval: {POLL_INTERVAL}s\nWallets: {len(wallets)}")
-
 
 # helper to reply either via update.message.reply_text (preferred) or bot.send_message
 def send_reply(update: Update, text: str):
@@ -229,18 +194,15 @@ def send_reply(update: Update, text: str):
         if hasattr(update, "message") and update.message:
             update.message.reply_text(text)
         else:
-            # fallback
             cid = update.effective_chat.id if update.effective_chat else None
             if cid:
                 send_message_sync(cid, text)
     except Exception:
-        # best-effort fallback
         try:
             cid = update.effective_chat.id
             send_message_sync(cid, text)
         except Exception:
             logger.exception("send_reply failed")
-
 
 # ---------------- Fetchers (CoinGlass / Debank / DexScreener / HyperDash) ----------------
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/search?q="
@@ -265,7 +227,6 @@ def fetch_from_dexscreener_addr(address: str) -> Optional[Dict[str, Any]]:
     except Exception:
         logger.debug("dexscreener fetch failed for %s", address)
     return None
-
 
 def fetch_from_debank(address: str) -> Optional[Dict[str, Any]]:
     try:
@@ -292,7 +253,6 @@ def fetch_from_debank(address: str) -> Optional[Dict[str, Any]]:
     except Exception:
         logger.debug("debank fetch failed for %s", address)
         return None
-
 
 def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
     if not COINGLASS_API_KEY:
@@ -356,7 +316,6 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
         logger.debug("coinglass fetch failed for %s", address)
         return None
 
-
 def fetch_from_hyperdash(address: str) -> Optional[Dict[str, Any]]:
     try:
         r = SESSION.get(f"{HYPERDASH_BASE}/trader/{address}", timeout=REQUEST_TIMEOUT)
@@ -364,13 +323,13 @@ def fetch_from_hyperdash(address: str) -> Optional[Dict[str, Any]]:
             return None
 
         text = r.text
-        import re, json as _json
+        import re
 
         m = re.search(r'"positions":(\[.*?\])', text)
         if not m:
             return None
 
-        arr = _json.loads(m.group(1))
+        arr = json.loads(m.group(1))
         positions = []
 
         for p in arr:
@@ -386,7 +345,6 @@ def fetch_from_hyperdash(address: str) -> Optional[Dict[str, Any]]:
         logger.debug("hyperdash fetch failed for %s", address)
     return None
 
-
 # ---------------- Snapshot detection ----------------
 def detect_and_build_snapshots(addr: str) -> Optional[Dict[str, Any]]:
     for f in (
@@ -399,7 +357,6 @@ def detect_and_build_snapshots(addr: str) -> Optional[Dict[str, Any]]:
         if r:
             return r
     return None
-
 
 # ---------------- Compare states → Events ----------------
 def compare_and_generate_events(addr: str, snap: Dict[str, Any]) -> List[str]:
@@ -448,11 +405,10 @@ def compare_and_generate_events(addr: str, snap: Dict[str, Any]) -> List[str]:
 
     for pp in prev_positions:
         key = (pp["symbol"], pp["side"])
-        if not any(p["symbol"] == key[0] and p["side"] == key[1] for p in now_positions):
-            events.append(f"⚡ CLOSE {key[0]} {key[1]} (${pp['size_usd']:.0f})")
+        if not any(p["symbol"] == key,[object Object], and p["side"] == key,[object Object], for p in now_positions):
+            events.append(f"⚡ CLOSE {key,[object Object],} {key,[object Object],} (${pp['size_usd']:.0f})")
 
     return events
-
 
 # ---------------- sending signals ----------------
 def send_signal_sync(text: str):
@@ -462,7 +418,6 @@ def send_signal_sync(text: str):
             send_message_sync(cid, text)
         except Exception as e:
             logger.error(f"send to {cid} failed: {e}")
-
 
 # ---------------- poller thread (synchronous) ----------------
 def process_wallet_sync(addr: str):
@@ -483,7 +438,6 @@ def process_wallet_sync(addr: str):
     for e in events:
         send_signal_sync(f"⚡ سیگنال — `{addr}`\n{e}\n⏱ {ts}")
 
-
 def poller_thread():
     logger.info("Poller thread started, interval %s seconds", POLL_INTERVAL)
     while True:
@@ -494,7 +448,6 @@ def poller_thread():
             except Exception:
                 logger.exception("poll error %s", w)
         time.sleep(POLL_INTERVAL)
-
 
 # ---------------- start/registration ----------------
 def build_and_start_bot():
@@ -525,15 +478,4 @@ def build_and_start_bot():
         logger.info("Using older python-telegram-bot (Updater)")
         updater = Updater(token=BOT_TOKEN, use_context=True)
         dp = updater.dispatcher
-        for cmd, fn in handlers:
-            dp.add_handler(CommandHandler(cmd, fn))
-        updater.start_polling()
-        updater.idle()
-
-
-def main():
-    build_and_start_bot()
-
-
-if __name__ == "__main__":
-    main()
+        for cmd, fn

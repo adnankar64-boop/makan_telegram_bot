@@ -17,10 +17,8 @@ import requests
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Set
 
-# اضافه کردن مسیر ریشه
+# اضافه کردن مسیر ریشه (در صورت نیاز)
 sys.path.append(os.path.dirname(__file__))
-
-from hyperdash_telegram_bot_mtproto_coinglass import main as bot_main
 
 # Try to import modern PTB Application; otherwise fall back to Updater
 USE_APPLICATION = False
@@ -35,7 +33,7 @@ try:
         filters,
     )
     USE_APPLICATION = True
-except ImportError:
+except Exception:
     # fallback imports for older PTB (v13)
     from telegram import Bot, Update
     from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
@@ -144,61 +142,25 @@ def send_message_sync(chat_id: int, text: str):
     except Exception as e:
         logger.exception("send_message failed: %s", e)
 
-# ---------------- Telegram command handlers (synchronous, compatible) ----------------
-def cmd_add_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        chat_id = update.effective_chat.id
-    except Exception:
-        return
-
-    authorize_chat(chat_id)
-    args = getattr(context, "args", None) or []
-    if not args:
-        send_reply(update, "Usage: /add <wallet_address>")
-        return
-    addr = args,[object Object],strip().lower()
-    wallets = load_wallets()
-    if addr in wallets:
-        send_reply(update, "آدرس قبلا وجود دارد.")
-    else:
-        wallets.append(addr)
-        save_wallets(wallets)
-        send_reply(update, f"آدرس {addr} اضافه شد ✅")
-
-def cmd_remove_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    authorize_chat(chat_id)
-    args = getattr(context, "args", None) or []
-    if not args:
-        send_reply(update, "Usage: /remove <wallet_address>")
-        return
-    addr = args,[object Object],strip().lower()
-    wallets = load_wallets()
-    if addr in wallets:
-        wallets.remove(addr)
-        save_wallets(wallets)
-        send_reply(update, f"آدرس {addr} حذف شد ✅")
-    else:
-        send_reply(update, "آدرس یافت نشد.")
-
-def cmd_list_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    authorize_chat(chat_id)
-    wallets = load_wallets()
-    txt = "فهرست کیف‌پول‌ها:\n" + ("\n".join(wallets) if wallets else "هیچ آدرسی ثبت نشده.")
-    send_reply(update, txt)
-
-def cmd_status_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    authorize_chat(chat_id)
-    wallets = load_wallets()
-    send_reply(update, f"Bot running.\nInterval: {POLL_INTERVAL}s\nWallets: {len(wallets)}")
-
 # helper to reply either via update.message.reply_text (preferred) or bot.send_message
 def send_reply(update: Update, text: str):
     try:
         if hasattr(update, "message") and update.message:
-            update.message.reply_text(text)
+            # For v20 Update.message.reply_text is coroutine — but in this wrapper we try to call
+            # .reply_text synchronously if available; else fallback to bot.send_message
+            try:
+                # if reply_text is a coroutine (v20), call bot.send_message to avoid awaiting here
+                reply = update.message.reply_text
+                # If it's coroutine function, it'll be callable but returns coroutine — handle safely:
+                res = reply(text)
+                # if res is coroutine, ignore (we're in sync context); fallback to bot.send_message
+                if hasattr(res, "__await__"):
+                    send_message_sync(update.effective_chat.id, text)
+            except Exception:
+                # fallback
+                cid = update.effective_chat.id if update.effective_chat else None
+                if cid:
+                    send_message_sync(cid, text)
         else:
             cid = update.effective_chat.id if update.effective_chat else None
             if cid:
@@ -209,6 +171,83 @@ def send_reply(update: Update, text: str):
             send_message_sync(cid, text)
         except Exception:
             logger.exception("send_reply failed")
+
+# ---------------- helpers for extracting args ----------------
+def extract_first_arg_from_update(update: Update, context) -> Optional[str]:
+    # Try context.args first (works for both versions)
+    args = getattr(context, "args", None)
+    if args:
+        return str(args[0]).strip().lower()
+    # Fall back to splitting message text
+    try:
+        text = ""
+        if hasattr(update, "message") and update.message and update.message.text:
+            text = update.message.text
+        elif update.effective_message and update.effective_message.text:
+            text = update.effective_message.text
+        parts = text.split()
+        if len(parts) >= 2:
+            return parts[1].strip().lower()
+    except Exception:
+        pass
+    return None
+
+# ---------------- Telegram command handlers (synchronous, compatible) ----------------
+def cmd_add_sync(update: Update, context):
+    try:
+        chat_id = update.effective_chat.id
+    except Exception:
+        return
+
+    authorize_chat(chat_id)
+    addr = extract_first_arg_from_update(update, context)
+    if not addr:
+        send_reply(update, "Usage: /add <wallet_address>")
+        return
+    wallets = load_wallets()
+    if addr in wallets:
+        send_reply(update, "آدرس قبلا وجود دارد.")
+    else:
+        wallets.append(addr)
+        save_wallets(wallets)
+        send_reply(update, f"آدرس {addr} اضافه شد ✅")
+
+def cmd_remove_sync(update: Update, context):
+    try:
+        chat_id = update.effective_chat.id
+    except Exception:
+        return
+    authorize_chat(chat_id)
+    addr = extract_first_arg_from_update(update, context)
+    if not addr:
+        send_reply(update, "Usage: /remove <wallet_address>")
+        return
+    wallets = load_wallets()
+    if addr in wallets:
+        wallets.remove(addr)
+        save_wallets(wallets)
+        send_reply(update, f"آدرس {addr} حذف شد ✅")
+    else:
+        send_reply(update, "آدرس یافت نشد.")
+
+def cmd_list_sync(update: Update, context):
+    try:
+        chat_id = update.effective_chat.id
+    except Exception:
+        return
+    authorize_chat(chat_id)
+    wallets = load_wallets()
+    txt = "فهرست کیف‌پول‌ها:\n" + ("\n".join(wallets) if wallets else "هیچ آدرسی ثبت نشده.")
+    send_reply(update, txt)
+
+def cmd_status_sync(update: Update, context):
+    try:
+        chat_id = update.effective_chat.id
+    except Exception:
+        return
+    authorize_chat(chat_id)
+    wallets = load_wallets()
+    send_reply(update, f"Bot running.\nInterval: {POLL_INTERVAL}s\nWallets: {len(wallets)}")
 
 # ---------------- Fetchers (CoinGlass / Debank / DexScreener / HyperDash) ----------------
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/search?q="
@@ -229,7 +268,7 @@ def fetch_from_dexscreener_addr(address: str) -> Optional[Dict[str, Any]]:
             liquidity = float((p.get("liquidity") or {}).get("usd") or 0)
             tokens[base] = tokens.get(base, 0.0) + liquidity
         if tokens:
-            return {"address": address, "tokens": tokens, "source": "dexscreener"}
+            return {"address": address, "tokens": tokens, "source": "dexscreener", "usd_total": sum(tokens.values())}
     except Exception:
         logger.debug("dexscreener fetch failed for %s", address)
     return None
@@ -247,7 +286,7 @@ def fetch_from_debank(address: str) -> Optional[Dict[str, Any]]:
             price = float(a.get("price") or 0)
             amt = float(a.get("amount") or 0)
             if sym:
-                tokens[sym] = price * amt
+                tokens[sym] = tokens.get(sym, 0) + price * amt
 
         return {
             "address": address,
@@ -266,7 +305,7 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
     headers = {"CG-API-KEY": COINGLASS_API_KEY}
 
     tokens = {}
-    usd_total = 0
+    usd_total = 0.0
     positions = []
 
     try:
@@ -282,8 +321,9 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
             for item in j.get("data", []):
                 sym = item.get("symbol")
                 v = float(item.get("balance_usd") or 0)
-                tokens[sym] = tokens.get(sym, 0) + v
-                usd_total += v
+                if sym:
+                    tokens[sym] = tokens.get(sym, 0) + v
+                    usd_total += v
 
         # futures positions (best-effort)
         try:
@@ -295,16 +335,11 @@ def fetch_from_coinglass(address: str) -> Optional[Dict[str, Any]]:
             )
             if r2.ok:
                 j2 = r2.json()
-                for item in j2.get("data", {}).get("list", []):
+                for item in (j2.get("data") or {}).get("list", []):
                     sym = item.get("symbol")
                     size = float(item.get("position_value_usd") or 0)
-                    side = (
-                        "long"
-                        if float(item.get("position_size") or 0) > 0
-                        else "short"
-                        if float(item.get("position_size") or 0) < 0
-                        else ""
-                    )
+                    pos_size = float(item.get("position_size") or 0)
+                    side = "long" if pos_size > 0 else "short" if pos_size < 0 else ""
                     if abs(size) >= MIN_POSITION_VALUE_USD:
                         positions.append({"symbol": sym, "size_usd": abs(size), "side": side})
                         usd_total += abs(size)
@@ -330,7 +365,6 @@ def fetch_from_hyperdash(address: str) -> Optional[Dict[str, Any]]:
 
         text = r.text
         import re
-
         m = re.search(r'"positions":(\[.*?\])', text)
         if not m:
             return None
@@ -346,7 +380,7 @@ def fetch_from_hyperdash(address: str) -> Optional[Dict[str, Any]]:
                 positions.append({"symbol": symbol, "size_usd": size, "side": side})
 
         if positions:
-            return {"address": address, "positions": positions, "source": "hyperdash"}
+            return {"address": address, "positions": positions, "source": "hyperdash", "usd_total": sum(p["size_usd"] for p in positions)}
     except Exception:
         logger.debug("hyperdash fetch failed for %s", address)
     return None
@@ -359,9 +393,16 @@ def detect_and_build_snapshots(addr: str) -> Optional[Dict[str, Any]]:
         fetch_from_dexscreener_addr,
         fetch_from_hyperdash,
     ):
-        r = f(addr)
-        if r:
-            return r
+        try:
+            r = f(addr)
+            if r:
+                # normalize keys
+                r.setdefault("tokens", {})
+                r.setdefault("positions", [])
+                r.setdefault("usd_total", float(r.get("usd_total") or 0.0))
+                return r
+        except Exception:
+            logger.debug("fetcher %s failed for %s", getattr(f, "__name__", str(f)), addr)
     return None
 
 # ---------------- Compare states → Events ----------------
@@ -378,11 +419,12 @@ def compare_and_generate_events(addr: str, snap: Dict[str, Any]) -> List[str]:
     prev_total = float(prev.get("usd_total") or 0)
     now_total = float(snap.get("usd_total") or 0)
 
-    # token events
+    # token events - new tokens
     for tok in now_tokens:
         if tok not in prev_tokens:
-            events.append(f"📥 New token: {tok} → ${now_tokens[tok]:.2f}")
+            events.append(f"📥 New token: {tok} → ${float(now_tokens[tok]):.2f}")
 
+    # token changes
     for tok in set(prev_tokens) | set(now_tokens):
         pv = float(prev_tokens.get(tok, 0))
         nv = float(now_tokens.get(tok, 0))
@@ -397,22 +439,24 @@ def compare_and_generate_events(addr: str, snap: Dict[str, Any]) -> List[str]:
     if abs(now_total - prev_total) > 5:
         events.append(f"ℹ️ Balance: ${prev_total:.2f} → ${now_total:.2f}")
 
-    # positions
-    prev_map = {(p["symbol"], p["side"]): p for p in prev_positions}
+    # positions: opens / increases / closes
+    prev_map = {(p.get("symbol"), p.get("side")): p for p in prev_positions}
 
     for p in now_positions:
-        key = (p["symbol"], p["side"])
+        key = (p.get("symbol"), p.get("side"))
         if key not in prev_map:
-            events.append(f"⚡ OPEN {p['symbol']} {p['side']} ${p['size_usd']:.0f}")
+            events.append(f"⚡ OPEN {p.get('symbol')} {p.get('side')} ${p.get('size_usd', 0):.0f}")
         else:
-            old = prev_map[key]["size_usd"]
-            if p["size_usd"] > old * 1.05:
-                events.append(f"⚡ INCREASE {p['symbol']} {p['side']} ${old:.0f} → ${p['size_usd']:.0f}")
+            old = float(prev_map[key].get("size_usd", 0))
+            new = float(p.get("size_usd", 0))
+            if new > old * 1.05:
+                events.append(f"⚡ INCREASE {p.get('symbol')} {p.get('side')} ${old:.0f} → ${new:.0f}")
 
     for pp in prev_positions:
-        key = (pp["symbol"], pp["side"])
-        if not any(p["symbol"] == key,[object Object], and p["side"] == key,[object Object], for p in now_positions):
-            events.append(f"⚡ CLOSE {key,[object Object],} {key,[object Object],} (${pp['size_usd']:.0f})")
+        # check if this previous position still exists in now_positions
+        exists = any((p.get("symbol") == pp.get("symbol") and p.get("side") == pp.get("side")) for p in now_positions)
+        if not exists:
+            events.append(f"⚡ CLOSE {pp.get('symbol')} {pp.get('side')} (${pp.get('size_usd', 0):.0f})")
 
     return events
 
@@ -460,7 +504,7 @@ def build_and_start_bot():
     """
     Build handlers and start bot depending on available PTB version.
     """
-    # Handlers (use sync functions; compatible with v13 and v20)
+    # Handlers (use sync functions; compatible with v13 and v20 via wrappers)
     handlers = [
         ("add", cmd_add_sync),
         ("remove", cmd_remove_sync),
@@ -475,4 +519,41 @@ def build_and_start_bot():
     if USE_APPLICATION:
         logger.info("Using python-telegram-bot v20+ (Application)")
         app = Application.builder().token(BOT_TOKEN).build()
-        for cmd, fn in handlers
+
+        # v20 expects async callbacks; wrap sync handlers in small async wrappers
+        import asyncio
+
+        def make_async_wrapper(sync_fn):
+            async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                try:
+                    # Call sync function — it may block briefly; acceptable for light commands.
+                    sync_fn(update, context)
+                except Exception:
+                    logger.exception("handler error")
+            return wrapper
+
+        for cmd, fn in handlers:
+            app.add_handler(CommandHandler(cmd, make_async_wrapper(fn)))
+
+        # start the application
+        app.run_polling()
+    else:
+        logger.info("Using python-telegram-bot v13 Updater fallback")
+        updater = Updater(token=BOT_TOKEN, use_context=True)
+        dp = updater.dispatcher
+
+        for cmd, fn in handlers:
+            dp.add_handler(CommandHandler(cmd, fn))
+
+        # start polling
+        updater.start_polling()
+        updater.idle()
+
+# ---------------- entrypoint ----------------
+if __name__ == "__main__":
+    try:
+        build_and_start_bot()
+    except KeyboardInterrupt:
+        logger.info("Shutting down by user request")
+    except Exception:
+        logger.exception("Fatal error starting bot")

@@ -4,15 +4,10 @@ import time
 import logging
 import threading
 import requests
-from datetime import datetime, timezone
+from datetime import datetime
 
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-    Updater,
-)
+from telegram.ext import Updater, CommandHandler
 
 # -----------------------------------
 # LOGGING
@@ -36,15 +31,12 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
 
 # -----------------------------------
-# LOAD/SAVE HELPERS
+# LOAD/SAVE
 # -----------------------------------
 def load_wallets():
     if not os.path.exists(WALLETS_FILE):
         return []
-    try:
-        return json.load(open(WALLETS_FILE))
-    except:
-        return []
+    return json.load(open(WALLETS_FILE))
 
 def save_wallets(w):
     json.dump(w, open(WALLETS_FILE, "w"), indent=2)
@@ -52,86 +44,94 @@ def save_wallets(w):
 def load_states():
     if not os.path.exists(STATES_FILE):
         return {}
-    try:
-        return json.load(open(STATES_FILE))
-    except:
-        return {}
+    return json.load(open(STATES_FILE))
 
 def save_states(s):
     json.dump(s, open(STATES_FILE, "w"), indent=2)
 
-# -----------------------------------
-# BOT COMMANDS (SYNC)
-# -----------------------------------
+states = load_states()
 authorized_chats = set()
 
-def send_message_sync(chat_id, text):
+def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+    requests.post(url, json={"chat_id": chat_id, "text": text})
 
-def cmd_add_sync(update: Update, context):
-    chat_id = update.effective_chat.id
-    authorized_chats.add(chat_id)
-
-    if len(context.args) != 1:
-        send_message_sync(chat_id, "⚠ آدرس کیف پول را صحیح وارد کنید.")
-        return
-
-    wallet = context.args[0]
-    wallets = load_wallets()
-    if wallet not in wallets:
-        wallets.append(wallet)
-        save_wallets(wallets)
-
-    send_message_sync(chat_id, f"✅ کیف پول *{wallet}* اضافه شد.")
-
-def cmd_remove_sync(update: Update, context):
-    chat_id = update.effective_chat.id
-    authorized_chats.add(chat_id)
-
-    if len(context.args) != 1:
-        send_message_sync(chat_id, "⚠ آدرس صحیح نیست.")
-        return
-
-    wallet = context.args[0]
-    wallets = load_wallets()
-    if wallet in wallets:
-        wallets.remove(wallet)
-        save_wallets(wallets)
-
-    send_message_sync(chat_id, f"❌ {wallet} حذف شد.")
-
-def cmd_list_sync(update: Update, context):
-    chat_id = update.effective_chat.id
-    authorized_chats.add(chat_id)
-
-    wallets = load_wallets()
-    if wallets:
-        text = "📌 کیف پول‌های ثبت‌شده:\n" + "\n".join(f"- `{w}`" for w in wallets)
-    else:
-        text = "هیچ کیف پولی ثبت نشده."
-    send_message_sync(chat_id, text)
-
-def cmd_status_sync(update: Update, context):
-    chat_id = update.effective_chat.id
-    authorized_chats.add(chat_id)
-
-    wallets = load_wallets()
-    send_message_sync(chat_id, f"کیف پول‌ها: {wallets}")
 
 # -----------------------------------
-# WALLET POLLER
+# API CALL
+# -----------------------------------
+def get_transactions(wallet):
+    """
+    مثال API:
+      از سایت BscScan یا EtherScan
+    """
+
+    url = f"https://api.bscscan.com/api?module=account&action=txlist&address={wallet}&sort=desc"
+    r = requests.get(url).json()
+
+    if r.get("status") != "1":
+        return []
+
+    return r["result"][:5]   # آخرین 5 تراکنش
+
+
+# -----------------------------------
+# TYPE DETECTOR
+# -----------------------------------
+def detect_type(tx, wallet):
+    f = tx["from"].lower()
+    t = tx["to"].lower()
+    wallet = wallet.lower()
+
+    if f == wallet and t != wallet:
+        return "SELL ❌"
+
+    if t == wallet and f != wallet:
+        return "BUY ✅"
+
+    return "TRANSFER 🔄"
+
+
+# -----------------------------------
+# POLLER
 # -----------------------------------
 def process_wallet(wallet):
-    """
-    اینجا باید منطق خواندن API و مقایسه وضعیت قرار گیرد.
-    فعلاً فقط تست است.
-    """
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return [f"🔔 تغییر جدید در کیف پول {wallet} — ⏱ {now}"]
+    global states
 
-def poller_thread():
-    logger.info("Poller thread started.")
+    txs = get_transactions(wallet)
+
+    if wallet not in states:
+        states[wallet] = txs[0]["hash"] if txs else ""
+        save_states(states)
+        return []
+
+    last = states[wallet]
+    new_events = []
+
+    for tx in txs:
+        if tx["hash"] == last:
+            break
+
+        tx_type = detect_type(tx, wallet)
+
+        msg = f"""
+🔔 *تغییر جدید در کیف پول*
+{wallet}
+
+نوع: {tx_type}
+هش: `{tx['hash']}`
+زمان: {datetime.fromtimestamp(int(tx["timeStamp"]))}
+"""
+        new_events.append(msg)
+
+    if txs:
+        states[wallet] = txs[0]["hash"]
+        save_states(states)
+
+    return new_events
+
+
+def poller():
     while True:
         wallets = load_wallets()
         for w in wallets:
@@ -139,59 +139,59 @@ def poller_thread():
                 events = process_wallet(w)
                 for e in events:
                     for cid in authorized_chats:
-                        send_message_sync(cid, e)
-            except Exception as exc:
-                logger.exception(f"Error processing {w}: {exc}")
-
+                        send_message(cid, e)
+            except Exception as ex:
+                logger.error(ex)
         time.sleep(POLL_INTERVAL)
 
-# -----------------------------------
-# BOT STARTER
-# -----------------------------------
-def build_and_start_bot():
-    logger.info("Starting bot...")
-
-    # Poller thread
-    t = threading.Thread(target=poller_thread, daemon=True)
-    t.start()
-
-    # Try using Application (v20+)
-    try:
-        app = Application.builder().token(BOT_TOKEN).build()
-
-        async def wrap(fn):
-            async def inner(update, context):
-                fn(update, context)
-            return inner
-
-        app.add_handler(CommandHandler("add", lambda u, c: cmd_add_sync(u, c)))
-        app.add_handler(CommandHandler("remove", lambda u, c: cmd_remove_sync(u, c)))
-        app.add_handler(CommandHandler("list", lambda u, c: cmd_list_sync(u, c)))
-        app.add_handler(CommandHandler("status", lambda u, c: cmd_status_sync(u, c)))
-
-        app.run_polling()
-
-    except:
-        # fallback for old PTB 13.x
-        updater = Updater(BOT_TOKEN, use_context=True)
-        dp = updater.dispatcher
-
-        dp.add_handler(CommandHandler("add", cmd_add_sync))
-        dp.add_handler(CommandHandler("remove", cmd_remove_sync))
-        dp.add_handler(CommandHandler("list", cmd_list_sync))
-        dp.add_handler(CommandHandler("status", cmd_status_sync))
-
-        updater.start_polling()
-        updater.idle()
 
 # -----------------------------------
-# ENTRYPOINT
+# COMMANDS
+# -----------------------------------
+def cmd_add(update, context):
+    chat = update.effective_chat.id
+    authorized_chats.add(chat)
+
+    if len(context.args) != 1:
+        return send_message(chat, "آدرس اشتباه است.")
+
+    wallet = context.args[0]
+    wallets = load_wallets()
+
+    if wallet not in wallets:
+        wallets.append(wallet)
+        save_wallets(wallets)
+
+    send_message(chat, "کیف پول اضافه شد.")
+
+
+def cmd_list(update, context):
+    chat = update.effective_chat.id
+    authorized_chats.add(chat)
+
+    wallets = load_wallets()
+    if not wallets:
+        send_message(chat, "هیچ کیف پولی نیست.")
+    else:
+        send_message(chat, "\n".join(wallets))
+
+
+# -----------------------------------
+# START
 # -----------------------------------
 def main():
-    try:
-        build_and_start_bot()
-    except Exception as e:
-        logger.exception(f"Fatal start error: {e}")
+    t = threading.Thread(target=poller, daemon=True)
+    t.start()
+
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("add", cmd_add))
+    dp.add_handler(CommandHandler("list", cmd_list))
+
+    updater.start_polling()
+    updater.idle()
+
 
 if __name__ == "__main__":
     main()

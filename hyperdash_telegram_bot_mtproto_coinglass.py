@@ -183,8 +183,7 @@ def main():
     t = threading.Thread(target=poller, daemon=True)
     t.start()
 
-    updater = Updater(BOT_TOKEN)
-
+    updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("add", cmd_add))

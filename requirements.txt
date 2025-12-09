@@ -3,10 +3,12 @@ requests
 telethon
 aiohttp
 
+
+aiosqlite
+
 flask
-requests
+
 urllib3
-telethon
 pyrogram
 python-dotenv
 certifi

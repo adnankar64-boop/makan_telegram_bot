@@ -151,7 +151,8 @@ def main():
     # DB init must run inside event loop -> use asyncio.run
     asyncio.run(init_db())
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+ app = ApplicationBuilder().token(TELEGRAM_TOKEN).job_queue(True).build()
+
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("addwallet", addwallet_cmd))

@@ -2,7 +2,6 @@
 import asyncio
 import os
 import time
-import json
 import aiohttp
 import aiosqlite
 
@@ -17,6 +16,7 @@ from telegram.ext import (
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")  # اختیاری
 
+# HyperDash / GMGN trending (Solana)
 GMGN_TREND_URL = "https://gmgn.ai/defi/quotation/v1/trending/sol"
 
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
@@ -40,6 +40,13 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS sent_signals (
                 key TEXT PRIMARY KEY,
                 ts INTEGER
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS wallets (
+                chat_id TEXT,
+                address TEXT,
+                created_at INTEGER
             )
         """)
         await db.commit()
@@ -83,8 +90,13 @@ async def mark_signal(key):
 async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await add_user(update.effective_chat.id)
     await update.message.reply_text(
-        "✅ بات مانیتور بازار فعال شد\n"
-        "سیگنال فقط روی حرکت غیرعادی ارسال می‌شود."
+        "✅ HyperDash Whale Bot فعال شد\n\n"
+        "📡 منبع سیگنال: HyperDash (GMGN)\n"
+        "🚨 هشدار فقط روی مومنتوم غیرعادی\n\n"
+        "دستورات:\n"
+        "/trend\n"
+        "/addwallet WALLET\n"
+        "/listwallets"
     )
 
 
@@ -102,12 +114,51 @@ async def trend_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"5m: {it.get('increaseRate_5m')}%"
         )
 
-    await update.message.reply_text("\n".join(out))
+    await update.message.reply_text("📊 HyperDash Trending:\n" + "\n".join(out))
 
 
-# ---------------- BACKGROUND LOOP ----------------
+async def addwallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not ctx.args:
+        await update.message.reply_text(
+            "❌ استفاده صحیح:\n/addwallet WALLET_ADDRESS"
+        )
+        return
+
+    wallet = ctx.args[0]
+    chat_id = str(update.effective_chat.id)
+
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT INTO wallets VALUES (?, ?, ?)",
+            (chat_id, wallet, now_ts())
+        )
+        await db.commit()
+
+    await update.message.reply_text(f"✅ والت ذخیره شد:\n{wallet}")
+
+
+async def listwallets_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+
+    async with aiosqlite.connect(DB_FILE) as db:
+        cur = await db.execute(
+            "SELECT address FROM wallets WHERE chat_id=?",
+            (chat_id,)
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        await update.message.reply_text("📭 هیچ والتی ثبت نشده")
+        return
+
+    txt = "📒 Wallets:\n" + "\n".join(f"- {r[0]}" for r in rows)
+    await update.message.reply_text(txt)
+
+
+# ---------------- BACKGROUND MONITOR ----------------
 async def monitor_loop(app):
     await app.wait_until_ready()
+    print("🔁 HyperDash monitor started")
 
     while True:
         try:
@@ -121,7 +172,7 @@ async def monitor_loop(app):
             for it in items[:10]:
                 p5 = float(it.get("increaseRate_5m") or 0)
 
-                # فیلتر نهنگی / مومنتوم
+                # 🚨 Whale / Momentum filter
                 if p5 >= 20:
                     key = f"{it.get('symbol')}_{int(now_ts()/60)}"
                     if await signal_sent(key):
@@ -130,9 +181,10 @@ async def monitor_loop(app):
                     await mark_signal(key)
 
                     msg = (
-                        "🚨 WHALE MOMENTUM\n"
+                        "🚨 HYPERDASH WHALE SIGNAL\n\n"
                         f"Token: {it.get('symbol')}\n"
-                        f"5m Change: {p5}%"
+                        f"5m Momentum: {p5}%\n\n"
+                        "Source: HyperDash"
                     )
 
                     for u in users:
@@ -143,22 +195,27 @@ async def monitor_loop(app):
 
         await asyncio.sleep(POLL_INTERVAL)
 
-# --- main (SYNC, صحیح) ---
+
+# ---------------- MAIN ----------------
 def main():
     if not TELEGRAM_TOKEN:
-        print("ERROR: TELEGRAM_TOKEN environment variable required.")
+        print("ERROR: TELEGRAM_TOKEN required")
         return
 
-    # init db
     asyncio.run(init_db())
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("trend", trend_cmd))
     app.add_handler(CommandHandler("addwallet", addwallet_cmd))
     app.add_handler(CommandHandler("listwallets", listwallets_cmd))
-    app.add_handler(CommandHandler("trend", trend_cmd))
 
-    # ⛔️ JobQueue را کلاً حذف کردیم (مشکل‌ساز بود)
+    # run background monitor
+    app.post_init = lambda app: asyncio.create_task(monitor_loop(app))
 
-    app.run_polling()   # ⬅️ بدون await
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,3 +1,3 @@
-from hyperdash_telegram_bot_mtproto_coinglass import main
+from bot import main
 
 main()

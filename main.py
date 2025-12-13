@@ -1,3 +1,4 @@
-from bot import main
+from hyperdash_telegram_bot_mtproto_coinglass import main
 
-main()
+if __name__ == "__main__":
+    main()

@@ -202,6 +202,7 @@ def main():
         print("ERROR: TELEGRAM_TOKEN required")
         return
 
+    # دیتابیس (قبل از loop)
     asyncio.run(init_db())
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -211,11 +212,13 @@ def main():
     app.add_handler(CommandHandler("addwallet", addwallet_cmd))
     app.add_handler(CommandHandler("listwallets", listwallets_cmd))
 
-    # run background monitor
-    app.post_init = lambda app: asyncio.create_task(monitor_loop(app))
+    # background task (روش صحیح)
+    async def post_init(app):
+        asyncio.create_task(monitor_loop(app))
 
+    app.post_init = post_init
+
+    # ❗️فقط این
     app.run_polling()
-
-
 if __name__ == "__main__":
     main()

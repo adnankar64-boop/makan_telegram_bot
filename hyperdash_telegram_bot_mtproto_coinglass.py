@@ -1,51 +1,38 @@
 # bot.py
-import asyncio
-import aiosqlite
-import aiohttp
 import os
-import json
 import time
-from datetime import datetime, timezone
+import json
+import asyncio
+import aiohttp
+import aiosqlite
 
-from telegram import Bot
+from telegram import Bot, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 
 GMGN_TREND_URL = "https://gmgn.ai/defi/quotation/v1/trending/sol"
-GMGN_SMARTMONEY = "https://gmgn.ai/defi/quotation/v1/smartmoney/{addr_or_token}"
 
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
-CACHE_TTL = 20
-DB_FILE = os.environ.get("DB_FILE", "bot_state.db")
+DB_FILE = "bot_state.db"
 
 
 def now_ts():
     return int(time.time())
 
 
-# ------------------ DATABASE ------------------
+# ================= DATABASE =================
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                chat_id TEXT PRIMARY KEY,
-                created_at INTEGER
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS wallets (
-                addr TEXT PRIMARY KEY,
-                note TEXT,
-                created_at INTEGER
+                chat_id TEXT PRIMARY KEY
             )
         """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sent_signals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key TEXT,
-                payload TEXT,
+                key TEXT PRIMARY KEY,
                 ts INTEGER
             )
         """)
@@ -54,7 +41,10 @@ async def init_db():
 
 async def add_user(chat_id):
     async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute("INSERT OR IGNORE INTO users VALUES (?, ?)", (str(chat_id), now_ts()))
+        await db.execute(
+            "INSERT OR IGNORE INTO users(chat_id) VALUES (?)",
+            (str(chat_id),)
+        )
         await db.commit()
 
 
@@ -62,23 +52,10 @@ async def list_users():
     async with aiosqlite.connect(DB_FILE) as db:
         cur = await db.execute("SELECT chat_id FROM users")
         rows = await cur.fetchall()
-        return [x[0] for x in rows]
+        return [int(r[0]) for r in rows]
 
 
-async def add_wallet(addr, note=""):
-    async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute("INSERT OR IGNORE INTO wallets VALUES (?, ?, ?)", (addr, note, now_ts()))
-        await db.commit()
-
-
-async def list_wallets():
-    async with aiosqlite.connect(DB_FILE) as db:
-        cur = await db.execute("SELECT addr, note FROM wallets")
-        rows = await cur.fetchall()
-        return [{"addr": r[0], "note": r[1]} for r in rows]
-
-
-async def remember_signal_once(key, payload):
+async def remember_signal_once(key):
     async with aiosqlite.connect(DB_FILE) as db:
         cur = await db.execute(
             "SELECT 1 FROM sent_signals WHERE key=? AND ts>?",
@@ -88,109 +65,89 @@ async def remember_signal_once(key, payload):
             return False
 
         await db.execute(
-            "INSERT INTO sent_signals(key,payload,ts) VALUES(?,?,?)",
-            (key, json.dumps(payload), now_ts())
+            "INSERT INTO sent_signals(key, ts) VALUES (?, ?)",
+            (key, now_ts())
         )
         await db.commit()
         return True
 
 
-# ------------------ COMMANDS ------------------
-async def start_cmd(update, ctx):
+# ================= COMMANDS =================
+async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await add_user(update.effective_chat.id)
-    await update.message.reply_text("سلام! بات GMGN آنلاین است.")
+    await update.message.reply_text("🤖 GMGN Whale Monitor فعال شد")
 
 
-async def addwallet_cmd(update, ctx):
-    if not ctx.args:
-        return await update.message.reply_text("Usage: /addwallet <address> [note]")
-
-    addr = ctx.args[0]
-    note = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else ""
-
-    await add_wallet(addr, note)
-    await update.message.reply_text("Wallet added.")
-
-
-async def listwallets_cmd(update, ctx):
-    ws = await list_wallets()
-    if not ws:
-        return await update.message.reply_text("No wallets stored.")
-
-    txt = "\n".join([f"- {w['addr']} {w['note']}" for w in ws])
-    await update.message.reply_text(txt)
-
-
-async def trend_cmd(update, ctx):
+async def trend_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession() as s:
-        try:
-            async with s.get(GMGN_TREND_URL, timeout=15) as r:
-                data = await r.json()
-        except Exception as e:
-            return await update.message.reply_text(str(e))
+        async with s.get(GMGN_TREND_URL, timeout=15) as r:
+            data = await r.json()
 
     items = data.get("data", [])
-    out = []
+    msg = []
 
     for t in items[:5]:
-        sym = t.get("symbol", "?")
-        price = t.get("price", "?")
-        p5 = t.get("increaseRate_5m", "?")
-        out.append(f"{sym} | {price} | 5m: {p5}")
+        msg.append(
+            f"{t.get('symbol')} | price: {t.get('price')} | 5m: {t.get('increaseRate_5m')}"
+        )
 
-    await update.message.reply_text("\n".join(out))
+    await update.message.reply_text("\n".join(msg))
 
 
-# ------------------ BACKGROUND JOB ------------------
-async def monitor_job(ctx):
+# ================= BACKGROUND JOB =================
+async def monitor_job(ctx: ContextTypes.DEFAULT_TYPE):
     bot: Bot = ctx.application.bot
 
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(GMGN_TREND_URL, timeout=15) as r:
-                trending = await r.json()
-        except:
-            return
+        async with session.get(GMGN_TREND_URL, timeout=15) as r:
+            data = await r.json()
 
-    items = trending.get("data", [])
-    users = [ADMIN_CHAT_ID] if ADMIN_CHAT_ID else await list_users()
+    items = data.get("data", [])
+    users = [int(ADMIN_CHAT_ID)] if ADMIN_CHAT_ID else await list_users()
 
     for it in items[:10]:
-        p5 = float(it.get("increaseRate_5m", 0) or 0)
+        try:
+            p5 = float(it.get("increaseRate_5m", 0) or 0)
+        except:
+            continue
 
         if p5 > 20:
-            key = f"trend_{it.get('symbol')}_{int(now_ts() / 60)}"
+            key = f"{it.get('symbol')}_{int(now_ts() / 60)}"
 
-            if await remember_signal_once(key, it):
-                txt = f"🚀 BUY SIGNAL\n{it.get('symbol')} | 5m: {p5}"
+            if not await remember_signal_once(key):
+                continue
 
-                for u in users:
-                    if u:
-                        await bot.send_message(int(u), txt)
+            text = (
+                f"🚀 BUY SIGNAL\n\n"
+                f"Token: {it.get('symbol')}\n"
+                f"5m Change: {p5}%\n"
+                f"Price: {it.get('price')}"
+            )
+
+            for u in users:
+                await bot.send_message(u, text)
 
 
-# ------------------ MAIN ------------------
+# ================= MAIN =================
 def main():
     if not TELEGRAM_TOKEN:
-        print("ERROR: TELEGRAM_TOKEN environment variable required.")
+        print("ERROR: TELEGRAM_TOKEN required")
         return
 
     asyncio.run(init_db())
 
-    app = (
-        ApplicationBuilder()
-        .token(TELEGRAM_TOKEN)
-        .job_queue(True)           # ← مهم! JobQueue فعال
-        .build()
-    )
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("addwallet", addwallet_cmd))
-    app.add_handler(CommandHandler("listwallets", listwallets_cmd))
     app.add_handler(CommandHandler("trend", trend_cmd))
 
-    app.job_queue.run_repeating(monitor_job, interval=POLL_INTERVAL, first=5)
+    app.job_queue.run_repeating(
+        monitor_job,
+        interval=POLL_INTERVAL,
+        first=10
+    )
 
+    print("✅ Bot started")
     app.run_polling()
 
 

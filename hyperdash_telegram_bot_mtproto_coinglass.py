@@ -19,19 +19,7 @@ def now_ts():
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            chat_id TEXT PRIMARY KEY,
-            created_at INTEGER
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS sent_signals (
-            key TEXT PRIMARY KEY,
-            ts INTEGER
-        )
-    """)
+    c.execute("CREATE TABLE IF NOT EXISTS users (chat_id TEXT PRIMARY KEY)")
     conn.commit()
     conn.close()
 
@@ -40,16 +28,15 @@ def start_cmd(update, context):
     chat_id = str(update.effective_chat.id)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users VALUES (?, ?)", (chat_id, now_ts()))
+    c.execute("INSERT OR IGNORE INTO users VALUES (?)", (chat_id,))
     conn.commit()
     conn.close()
-
-    update.message.reply_text("✅ HyperDash Whale Bot فعال شد")
+    update.message.reply_text("✅ HyperDash Bot فعال شد")
 
 
 def trend_cmd(update, context):
-    r = requests.get(GMGN_TREND_URL, timeout=10).json()
-    items = r.get("data", [])[:5]
+    data = requests.get(GMGN_TREND_URL, timeout=10).json()
+    items = data.get("data", [])[:5]
 
     txt = "📊 HyperDash Trending:\n"
     for it in items:
@@ -61,24 +48,22 @@ def trend_cmd(update, context):
 def monitor_loop(bot):
     while True:
         try:
-            r = requests.get(GMGN_TREND_URL, timeout=10).json()
-            items = r.get("data", [])
+            data = requests.get(GMGN_TREND_URL, timeout=10).json()
+            items = data.get("data", [])
 
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
-            users = [row[0] for row in c.execute("SELECT chat_id FROM users")]
+            users = [r[0] for r in c.execute("SELECT chat_id FROM users")]
             conn.close()
 
-            for it in items[:10]:
+            for it in items:
                 p5 = float(it.get("increaseRate_5m") or 0)
                 if p5 >= 20:
-                    msg = (
-                        "🚨 HYPERDASH WHALE SIGNAL\n"
-                        f"{it.get('symbol')} | 5m: {p5}%"
-                    )
                     for u in users:
-                        bot.send_message(chat_id=int(u), text=msg)
-
+                        bot.send_message(
+                            chat_id=int(u),
+                            text=f"🚨 WHALE SIGNAL\n{it.get('symbol')} | {p5}%"
+                        )
         except Exception as e:
             print("monitor error:", e)
 
@@ -86,6 +71,10 @@ def monitor_loop(bot):
 
 
 def main():
+    if not TELEGRAM_TOKEN:
+        print("TOKEN NOT SET")
+        return
+
     init_db()
 
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
@@ -102,7 +91,3 @@ def main():
 
     updater.start_polling()
     updater.idle()
-
-
-if __name__ == "__main__":
-    main()

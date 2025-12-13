@@ -143,24 +143,22 @@ async def monitor_loop(app):
 
         await asyncio.sleep(POLL_INTERVAL)
 
-
-# ---------------- MAIN ----------------
-async def main():
+# --- main (SYNC, صحیح) ---
+def main():
     if not TELEGRAM_TOKEN:
-        raise RuntimeError("TELEGRAM_TOKEN is required")
+        print("ERROR: TELEGRAM_TOKEN environment variable required.")
+        return
 
-    await init_db()
+    # init db
+    asyncio.run(init_db())
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("addwallet", addwallet_cmd))
+    app.add_handler(CommandHandler("listwallets", listwallets_cmd))
     app.add_handler(CommandHandler("trend", trend_cmd))
 
-    # background task
-    app.create_task(monitor_loop(app))
+    # ⛔️ JobQueue را کلاً حذف کردیم (مشکل‌ساز بود)
 
-    await app.run_polling()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    app.run_polling()   # ⬅️ بدون await

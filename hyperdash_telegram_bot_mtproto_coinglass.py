@@ -42,7 +42,11 @@ async def monitor(app):
         msg = "📊 DexScreener Top:\n"
         for t in top[:5]:
             msg += f"{t['baseToken']['symbol']} {t['priceUsd'][:6]} | {t['priceChange']['hour24']}\n"
-        await app.bot.send_message(<CHAT_ID>, msg)
+       await app.bot.send_message(
+    chat_id=CHAT_ID,
+    text=msg
+)
+
 
         # wallet activity
         for address in WATCH_WALLETS:

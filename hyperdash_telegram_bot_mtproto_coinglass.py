@@ -6,7 +6,11 @@ import aiohttp
 import aiosqlite
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
@@ -20,7 +24,7 @@ def now_ts():
     return int(time.time())
 
 
-# ---------- DB ----------
+# ---------------- DB ----------------
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
         await db.execute("""
@@ -72,7 +76,7 @@ async def mark_signal(key):
         await db.commit()
 
 
-# ---------- Commands ----------
+# ---------------- Commands ----------------
 async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await add_user(update.effective_chat.id)
     await update.message.reply_text("✅ بات فعال شد")
@@ -91,10 +95,8 @@ async def trend_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 
-# ---------- Background ----------
+# ---------------- Background ----------------
 async def monitor_loop(app):
-    await app.wait_until_ready()
-
     while True:
         try:
             async with aiohttp.ClientSession() as s:
@@ -124,15 +126,22 @@ async def monitor_loop(app):
         await asyncio.sleep(POLL_INTERVAL)
 
 
-# ---------- MAIN ----------
-def main():
-    asyncio.run(init_db())
+# 🔥 اینجا جادو اتفاق می‌افتد
+async def post_init(app):
+    await init_db()
+    app.create_task(monitor_loop(app))
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+# ---------------- MAIN ----------------
+def main():
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(post_init)   # ✅ بسیار مهم
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("trend", trend_cmd))
-
-    app.create_task(monitor_loop(app))
 
     app.run_polling()

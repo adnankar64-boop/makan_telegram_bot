@@ -1,147 +1,65 @@
-# bot.py
 import asyncio
-import os
 import time
 import aiohttp
-import aiosqlite
-
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
+TELEGRAM_TOKEN = "<توکن>"
+POLL_INTERVAL = 20
+WATCH_WALLETS = {}  # {address: {"chain":"sol" or "eth", "last_bal":0}}
 
-GMGN_TREND_URL = "https://gmgn.ai/defi/quotation/v1/trending/sol"
-POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
-DB_FILE = "bot_state.db"
-
-
-def now_ts():
-    return int(time.time())
-
-
-# ---------------- DB ----------------
-async def init_db():
-    async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                chat_id TEXT PRIMARY KEY,
-                created_at INTEGER
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS sent_signals (
-                key TEXT PRIMARY KEY,
-                ts INTEGER
-            )
-        """)
-        await db.commit()
-
-
-async def add_user(chat_id):
-    async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users VALUES (?, ?)",
-            (str(chat_id), now_ts())
-        )
-        await db.commit()
-
-
-async def list_users():
-    async with aiosqlite.connect(DB_FILE) as db:
-        cur = await db.execute("SELECT chat_id FROM users")
-        rows = await cur.fetchall()
-        return [int(r[0]) for r in rows]
-
-
-async def signal_sent(key):
-    async with aiosqlite.connect(DB_FILE) as db:
-        cur = await db.execute(
-            "SELECT 1 FROM sent_signals WHERE key=?",
-            (key,)
-        )
-        return await cur.fetchone() is not None
-
-
-async def mark_signal(key):
-    async with aiosqlite.connect(DB_FILE) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO sent_signals VALUES (?, ?)",
-            (key, now_ts())
-        )
-        await db.commit()
-
-
-# ---------------- Commands ----------------
-async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await add_user(update.effective_chat.id)
-    await update.message.reply_text("✅ بات فعال شد")
-
-
-async def trend_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def fetch_dexscreener():
+    url = "https://api.dexscreener.com/latest/dex/top"
     async with aiohttp.ClientSession() as s:
-        async with s.get(GMGN_TREND_URL) as r:
-            data = await r.json()
+        async with s.get(url) as r:
+            return await r.json()
 
-    items = data.get("data", [])[:5]
-    msg = "\n".join(
-        f"{i['symbol']} | 5m: {i['increaseRate_5m']}%"
-        for i in items
-    )
-    await update.message.reply_text(msg)
+async def fetch_gmgn():
+    url = "https://gmgn.ai/defi/quotation/v1/rank/sol/swaps/5m?orderby=smartmoney&direction=desc"
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url) as r:
+            return await r.json()
 
+async def check_wallet_activity(address):
+    # فقط مثال برای Solana RPC
+    rpc_url = "https://api.mainnet-beta.solana.com"
+    payload = {
+        "jsonrpc":"2.0","id":1,
+        "method":"getConfirmedSignaturesForAddress2",
+        "params":[address, {"limit":3}]
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(rpc_url,json=payload) as r:
+            return await r.json()
 
-# ---------------- Background ----------------
-async def monitor_loop(app):
+async def monitor(app):
     while True:
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(GMGN_TREND_URL) as r:
-                    data = await r.json()
+        ds = await fetch_dexscreener()
+        gmgn = await fetch_gmgn()
 
-            users = [int(ADMIN_CHAT_ID)] if ADMIN_CHAT_ID else await list_users()
+        # مثال ساده: توکن هایی با حجم بالا
+        top = ds.get("pairs",[]) or ds.get("pairs",[])
+        msg = "📊 DexScreener Top:\n"
+        for t in top[:5]:
+            msg += f"{t['baseToken']['symbol']} {t['priceUsd'][:6]} | {t['priceChange']['hour24']}\n"
+        await app.bot.send_message(<CHAT_ID>, msg)
 
-            for it in data.get("data", [])[:10]:
-                p5 = float(it.get("increaseRate_5m") or 0)
-                if p5 >= 20:
-                    key = f"{it['symbol']}_{int(now_ts()/60)}"
-                    if await signal_sent(key):
-                        continue
-
-                    await mark_signal(key)
-
-                    for u in users:
-                        await app.bot.send_message(
-                            u,
-                            f"🚨 WHALE MOMENTUM\n{it['symbol']} | 5m: {p5}%"
-                        )
-
-        except Exception as e:
-            print("monitor error:", e)
+        # wallet activity
+        for address in WATCH_WALLETS:
+            act = await check_wallet_activity(address)
+            if act.get("result"):
+                await app.bot.send_message(<CHAT_ID>, f"📌 Activity in {address}: {act}")
 
         await asyncio.sleep(POLL_INTERVAL)
 
+async def start(update:Update,ctx):
+    await update.message.reply_text("بات روشن شد!")
 
-# 🔥 اینجا جادو اتفاق می‌افتد
-async def post_init(app):
-    await init_db()
-    app.create_task(monitor_loop(app))
-
-
-# ---------------- MAIN ----------------
 def main():
-    app = (
-        ApplicationBuilder()
-        .token(TELEGRAM_TOKEN)
-        .post_init(post_init)   # ✅ بسیار مهم
-        .build()
-    )
-
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("trend", trend_cmd))
-
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.create_task(monitor(app))
     app.run_polling()
+
+if __name__=="__main__":
+    main()

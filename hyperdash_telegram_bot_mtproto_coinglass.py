@@ -2,7 +2,6 @@ import os
 import asyncio
 import aiohttp
 import aiosqlite
-import time
 
 from telegram import Update
 from telegram.ext import (
@@ -13,7 +12,7 @@ from telegram.ext import (
 
 # ================== CONFIG ==================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = int(os.environ.get("CHAT_ID"))
+CHAT_ID = int(os.environ["CHAT_ID"])  # حتماً ست شود
 
 DB_FILE = "wallets.db"
 POLL_INTERVAL = 20  # seconds
@@ -86,7 +85,7 @@ async def start_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def addwallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("❌ Usage: /addwallet WALLET_ADDRESS")
+        await update.message.reply_text("❌ Usage:\n/addwallet WALLET_ADDRESS")
         return
 
     address = ctx.args[0]
@@ -97,40 +96,46 @@ async def addwallet_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ================== MONITOR ==================
-async def monitor(app):
-    while True:
-        try:
-            wallets = await get_wallets()
+# ================== MONITOR JOB ==================
+async def monitor(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        wallets = await get_wallets()
 
-            for address, last_sig in wallets:
-                sig = await get_last_signature(address)
+        for address, last_sig in wallets:
+            sig = await get_last_signature(address)
 
-                if sig and sig != last_sig:
-                    await update_last_sig(address, sig)
+            if sig and sig != last_sig:
+                await update_last_sig(address, sig)
 
-                    await app.bot.send_message(
-                        chat_id=CHAT_ID,
-                        text=(
-                            "🐋 WALLET ACTIVITY DETECTED\n\n"
-                            f"Address:\n{address}\n\n"
-                            f"Tx:\n{sig}"
-                        )
+                await context.bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=(
+                        "🐋 WALLET ACTIVITY DETECTED\n\n"
+                        f"Address:\n{address}\n\n"
+                        f"Tx:\n{sig}"
                     )
+                )
 
-        except Exception as e:
-            print("Monitor error:", e)
+    except Exception as e:
+        print("Monitor error:", e)
 
-        await asyncio.sleep(POLL_INTERVAL)
+
+# ================== POST INIT ==================
+async def post_init(app):
+    await init_db()
+
+    app.job_queue.run_repeating(
+        monitor,
+        interval=POLL_INTERVAL,
+        first=5,
+    )
 
 
 # ================== MAIN ==================
-async def post_init(app):
-    await init_db()
-    app.create_task(monitor(app))
-
-
 def main():
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError("TELEGRAM_TOKEN not set")
+
     app = (
         ApplicationBuilder()
         .token(TELEGRAM_TOKEN)

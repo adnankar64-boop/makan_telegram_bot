@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: makan-telegram-bot
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python hyperdash_telegram_bot_mtproto_coinglass.py
-    runtime: python-3.11.9

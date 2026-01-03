@@ -1,4 +1,8 @@
 import asyncio
+
+from solana_trade_monitor import monitor
+
+
 from solana_monitor import monitor
 from wallet_store import list_wallets
 

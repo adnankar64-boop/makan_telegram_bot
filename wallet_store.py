@@ -1,29 +1,33 @@
 import json
 import os
 
-FILE = "wallets.json"
+WALLET_FILE = "wallets.json"
 
-def load():
-    if not os.path.exists(FILE):
+def _load():
+    if not os.path.exists(WALLET_FILE):
         return []
-    with open(FILE, "r") as f:
+    with open(WALLET_FILE, "r") as f:
         return json.load(f)
 
-def save(data):
-    with open(FILE, "w") as f:
-        json.dump(data, f)
+def _save(data):
+    with open(WALLET_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-def add_wallet(w):
-    data = load()
-    if w not in data:
-        data.append(w)
-        save(data)
+def add_wallet(address: str):
+    wallets = _load()
+    if address not in wallets:
+        wallets.append(address)
+        _save(wallets)
+        return True
+    return False
 
-def remove_wallet(w):
-    data = load()
-    if w in data:
-        data.remove(w)
-        save(data)
+def remove_wallet(address: str):
+    wallets = _load()
+    if address in wallets:
+        wallets.remove(address)
+        _save(wallets)
+        return True
+    return False
 
-def get_wallets():
-    return load()
+def list_wallets():
+    return _load()

@@ -1,54 +1,29 @@
-import sqlite3
+import json
+import os
 
-conn = sqlite3.connect("wallets.db", check_same_thread=False)
-cursor = conn.cursor()
+FILE = "wallets.json"
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS wallets (
-    address TEXT PRIMARY KEY,
-    label TEXT
-)
-""")
+def load():
+    if not os.path.exists(FILE):
+        return []
+    with open(FILE, "r") as f:
+        return json.load(f)
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-)
-""")
+def save(data):
+    with open(FILE, "w") as f:
+        json.dump(data, f)
 
-conn.commit()
+def add_wallet(w):
+    data = load()
+    if w not in data:
+        data.append(w)
+        save(data)
 
+def remove_wallet(w):
+    data = load()
+    if w in data:
+        data.remove(w)
+        save(data)
 
-def add_wallet(address, label=""):
-    cursor.execute(
-        "INSERT OR IGNORE INTO wallets VALUES (?, ?)",
-        (address, label)
-    )
-    conn.commit()
-
-
-def remove_wallet(address):
-    cursor.execute("DELETE FROM wallets WHERE address = ?", (address,))
-    conn.commit()
-
-
-def list_wallets():
-    cursor.execute("SELECT * FROM wallets")
-    return cursor.fetchall()
-
-
-def set_threshold(value):
-    cursor.execute(
-        "INSERT OR REPLACE INTO settings VALUES ('threshold', ?)",
-        (str(value),)
-    )
-    conn.commit()
-
-
-def get_threshold():
-    cursor.execute(
-        "SELECT value FROM settings WHERE key='threshold'"
-    )
-    row = cursor.fetchone()
-    return int(row[0]) if row else 50000
+def get_wallets():
+    return load()

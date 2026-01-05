@@ -1,33 +1,16 @@
-import json
-import os
+def get_wallets(context):
+    return context.bot_data.setdefault("wallets", [])
 
-WALLET_FILE = "wallets.json"
-
-def _load():
-    if not os.path.exists(WALLET_FILE):
-        return []
-    with open(WALLET_FILE, "r") as f:
-        return json.load(f)
-
-def _save(data):
-    with open(WALLET_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-def add_wallet(address: str):
-    wallets = _load()
+def add_wallet(context, address: str):
+    wallets = get_wallets(context)
     if address not in wallets:
         wallets.append(address)
-        _save(wallets)
         return True
     return False
 
-def remove_wallet(address: str):
-    wallets = _load()
+def remove_wallet(context, address: str):
+    wallets = get_wallets(context)
     if address in wallets:
         wallets.remove(address)
-        _save(wallets)
         return True
     return False
-
-def list_wallets():
-    return _load()
